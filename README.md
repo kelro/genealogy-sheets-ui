@@ -225,3 +225,30 @@ dist/
 appsscript.json
 ```
 
+---
+
+## 🛠 Contributing & Development
+
+This project uses GitHub CLI (`gh`) and Git for version control.  
+If you need to push changes or update the repo, see the step-by-step guide:
+
+➡️ [PUSH_TO_GITHUB.md](PUSH_TO_GITHUB.md)
+
+That document covers:
+- Creating the repo from the command line (no GitHub website required)
+- Making the first commit and initial push
+- Everyday updates (edit/add/delete files)
+- Branching, pull requests, tags/releases
+- Common fixes for Git errors
+
+### 🔄 Google Apps Script Sync (clasp)
+
+If you want to sync your Apps Script project (from Google Sheets) with this repo,  
+see the **clasp workflow** section in [PUSH_TO_GITHUB.md](PUSH_TO_GITHUB.md).  
+This explains how to:
+
+- Install and log in to `clasp`
+- Pull code down from Google
+- Push local edits back to Google
+- Keep `appsscript.json` versioned in GitHub
+

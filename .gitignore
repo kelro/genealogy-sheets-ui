@@ -7,7 +7,6 @@ dist/
 
 # Apps Script clasp (if adopted later)
 .clasp.json
-appsscript.json
 
 # Logs / temp exports
 *.log
