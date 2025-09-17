@@ -1,0 +1,504 @@
+<!-- Phase 5 + Relink Child + Delete Child + Delete Person (no external deps) -->
+<h2>Search & Edit</h2>
+
+<div style="display:flex; gap:8px; margin-bottom:8px;">
+  <input id="q" type="text" placeholder="Search by name or PersonID…"
+         onkeydown="if(event.key==='Enter') doSearch();"
+         style="flex:1; padding:8px; border:1px solid #ccc; border-radius:6px;" />
+  <button onclick="doSearch()"
+          style="padding:8px 12px; border:0; border-radius:8px; font-weight:600; background:#1a73e8; color:#fff;">
+    Search
+  </button>
+</div>
+
+<div id="results"></div>
+<div id="detail" style="margin-top:10px;"></div>
+
+<style>
+  html, body { font-family: Roboto, Arial, "Segoe UI", Helvetica, sans-serif; font-size: 14px; line-height: 1.4; }
+  input, button, select, textarea, .btn, .status, .section-header h3 { font: inherit; }
+
+  .card{border:1px solid #e0e0e0;border-radius:10px;padding:12px;margin:10px 0;background:#fff;}
+  .subcard{border:1px solid #eee;border-radius:8px;padding:10px;margin:10px 0;background:#fafafa;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > div{flex:1 1 220px;min-width:200px;}
+  .lbl{font-size:12px;color:#555;margin:10px 0 4px;}
+  .in{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;}
+  .ta{min-height:80px;}
+  .muted{color:#666;}
+  .small{font-size:12px;}
+  .actions{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;}
+  .btn{padding:8px 12px;border:0;border-radius:8px;font-weight:600;cursor:pointer;}
+  .btn.primary{background:#1a73e8;color:#fff;}
+  .btn:disabled{opacity:.55;cursor:not-allowed;}
+  .btn.danger{background:#d93025;color:#fff;}
+
+  .status{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:6px;box-sizing:border-box;font-weight:600;line-height:1;}
+  .status.note{background:#f1f3f4;color:#5f6368;}
+  .status.loading{background:#f1f3f4;color:#5f6368;}
+  .status.ok{background:#e6f4ea;color:#0f9d58;}
+  .status.err{background:#fce8e6;color:#d93025;}
+  .status.loading::before{content:"";width:14px;height:14px;border:2px solid rgba(0,0,0,.25);border-top-color:rgba(0,0,0,.55);border-radius:50%;animation:spin .8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .status svg{width:16px;height:16px;display:block;}
+
+  .section{border:1px solid #e0e0e0;border-radius:10px;margin:10px 0;background:#fff;}
+  .section-header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #eee;cursor:pointer;user-select:none;}
+  .section-header h3{margin:0;font-size:16px;}
+  .chev{width:18px;height:18px;display:inline-block;transition:transform .18s ease;}
+  .collapsed .chev{transform:rotate(-90deg);}
+  .section-body{padding:10px 12px;}
+  .collapsed .section-body{display:none;}
+
+  .dirty > .section-header h3::after{content:" •";color:#d93025;font-weight:700;}
+</style>
+
+<script>
+  let CURRENT_PERSON_ID = null;
+
+  function qs(id){ return document.getElementById(id); }
+  function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function showErr(err){
+    const msg = (err && err.message) ? err.message : (''+err);
+    const d = document.createElement('div');
+    d.textContent = 'Error: ' + msg;
+    d.style.cssText = 'margin-top:8px;padding:8px;border-radius:6px;background:#fce8e6;color:#b00020;';
+    (qs('detail')||document.body).prepend(d);
+  }
+  window.onerror = function(msg, src, line, col, e){
+    showErr({message: (msg || (e && e.message) || 'Script error') + ' @' + (line||'?') + ':' + (col||'?')});
+    return false;
+  };
+
+  function setStatus(el, type, text){
+    if(!el) return;
+    if(type==='ok'){
+      const msg = (text||'Saved').replace(/✓/g,'').trim();
+      el.className = 'status ok';
+      el.innerHTML = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg><span>'+msg+'</span>';
+    }else if(type==='err'){
+      el.className = 'status err';
+      el.innerHTML = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg><span>'+(text||'Failed')+'</span>';
+    }else if(type==='loading'){
+      el.className = 'status loading';
+      el.innerHTML = '<span>'+(text||'Saving…')+'</span>';
+    }else{
+      el.className = 'status note';
+      el.innerHTML = '<span>'+(text||'Editing…')+'</span>';
+    }
+  }
+
+  function doSearch(){
+    const q = qs('q').value.trim();
+    qs('detail').innerHTML = '';
+    qs('results').innerHTML = '<div class="small muted">Searching…</div>';
+    google.script.run
+      .withSuccessHandler(renderResults)
+      .withFailureHandler(showErr)
+      .searchPeople(q);
+  }
+
+  function renderResults(list){
+    const div = qs('results');
+    if(!list || !list.length){
+      div.innerHTML = '<div class="small muted">No matches.</div>';
+      return;
+    }
+    div.innerHTML = '';
+    list.forEach(p => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML =
+        '<b>'+esc(p.fullName || '(Unnamed)')+'</b>' +
+        '<div class="small muted">'+esc(p.personId)+'</div>' +
+        '<div class="small" style="margin-top:2px">'+esc([p.dob,p.pob].filter(Boolean).join(' • '))+'</div>' +
+        '<div style="margin-top:8px">' +
+          '<button class="btn primary" onclick="openDetail(\''+p.personId+'\')">Open</button>' +
+        '</div>';
+      div.appendChild(card);
+    });
+  }
+
+  function openDetail(personId, onDone){
+    CURRENT_PERSON_ID = personId;
+    const prevScroll = window.scrollY || document.documentElement.scrollTop || 0;
+    qs('detail').innerHTML = '<div class="small muted">Loading…</div>';
+    google.script.run
+      .withSuccessHandler(bundle => {
+        renderDetail(bundle, personId);
+        requestAnimationFrame(()=>window.scrollTo(0, prevScroll));
+        if (typeof onDone === 'function') onDone();
+      })
+      .withFailureHandler(showErr)
+      .getPersonBundle(personId);
+  }
+  function refreshDetailWithScroll(note){
+    if (!CURRENT_PERSON_ID) return;
+    const y = window.scrollY || document.documentElement.scrollTop || 0;
+    openDetail(CURRENT_PERSON_ID, function(){
+      requestAnimationFrame(()=>window.scrollTo(0, y));
+      if (note) {
+        const n = document.createElement('div');
+        n.className = 'ok';
+        n.textContent = note;
+        (qs('detail')||document.body).prepend(n);
+        setTimeout(()=>n.remove(), 2000);
+      }
+    });
+  }
+
+  function toggleSection(id){
+    const sec = document.getElementById(id);
+    if(!sec) return;
+    sec.classList.toggle('collapsed');
+  }
+  function markDirty(secId){
+    const sec = document.getElementById(secId);
+    if(sec) sec.classList.add('dirty');
+  }
+  function clearDirty(secId){
+    const sec = document.getElementById(secId);
+    if(sec) sec.classList.remove('dirty');
+  }
+
+  function renderDetail(bundle, personId){
+    if(!bundle || !bundle.person){
+      qs('detail').innerHTML = '<div class="card" style="background:#fce8e6;color:#b00020;">Person not found. (ID: '+esc(personId)+')</div>';
+      return;
+    }
+
+    const p = bundle.person;
+    const marriages = bundle.marriages || [];
+    const children  = bundle.children  || [];
+
+    const marriageOptions = [{ id:'', label:'— Out-of-wedlock / Not linked —' }]
+      .concat(marriages.map(m => ({
+        id: m.MarriageID,
+        label: (m.SpouseName || '(Unnamed spouse)') + ' [' + (m.MarriageID||'').slice(0,8) + ']'
+      })));
+
+    let html = '';
+
+    /* PERSON */
+    html += '<div class="section" id="sec-person">'
+         +    '<div class="section-header" onclick="toggleSection(\'sec-person\')">'
+         +      '<h3>Person</h3><span class="chev">▸</span>'
+         +    '</div>'
+         +    '<div class="section-body">'
+         +      '<div class="card" style="margin:0;border:0;padding:0;background:transparent;">'
+         +        '<div style="font-weight:700;font-size:16px;margin-bottom:4px;">'+esc(p.FullName || '(Unnamed)')+'</div>'
+         +        '<div class="small muted">'+esc(p.PersonID)+'</div>'
+         +        '<div class="row" style="margin-top:8px;">'
+         +          '<div><div class="lbl">Born (MM-DD-YYYY)</div><input class="in" id="p_dob" type="date" value="'+esc(p.DateOfBirth||'')+'"></div>'
+         +          '<div><div class="lbl">Died (MM-DD-YYYY)</div><input class="in" id="p_dod" type="date" value="'+esc(p.DateOfDeath||'')+'"></div>'
+         +        '</div>'
+         +        '<div class="row">'
+         +          '<div><div class="lbl">Birth Place</div><input class="in" id="p_pob" type="text" value="'+esc(p.PlaceOfBirth||'')+'"></div>'
+         +          '<div><div class="lbl">Death Place</div><input class="in" id="p_pod" type="text" value="'+esc(p.PlaceOfDeath||'')+'"></div>'
+         +        '</div>'
+         +        '<div class="lbl">Parents</div><input class="in" id="p_parents" type="text" value="'+esc(p.Parents||'')+'">'
+         +        '<div class="lbl">Notes</div><textarea class="in ta" id="p_notes">'+esc(p.Notes||'')+'</textarea>'
+         +        '<div class="actions">'
+         +          '<button class="btn primary" id="btnSavePerson" onclick="savePerson(\''+p.PersonID+'\')" disabled>Save Person</button>'
+         +          '<button class="btn danger" id="btnDeletePerson" onclick="deletePersonUI(\''+p.PersonID+'\', \''+esc(p.FullName||'')+'\')">Delete Person</button>'
+         +          '<span class="status" id="stPerson"></span>'
+         +        '</div>'
+         +      '</div>'
+         +    '</div>'
+         +  '</div>';
+
+    /* MARRIAGES */
+    html += '<div class="section" id="sec-marriages">'
+         +    '<div class="section-header" onclick="toggleSection(\'sec-marriages\')">'
+         +      '<h3>Marriages</h3><span class="chev">▸</span>'
+         +    '</div>'
+         +    '<div class="section-body">';
+    if(!marriages.length){
+      html += '<div class="small muted">None recorded.</div>';
+    }else{
+      marriages.forEach(m => {
+        var stVal = String(m.Status || '');
+        var statusOptions = [
+          {v:'',        label:'—'},
+          {v:'Married', label:'Married'},
+          {v:'Divorced',label:'Divorced'},
+          {v:'Widowed', label:'Widowed'},
+          {v:'Unknown', label:'Unknown'}
+        ].map(function(o){
+          var sel = (o.v === stVal) ? ' selected' : '';
+          return '<option value="'+esc(o.v)+'"'+sel+'>'+esc(o.label)+'</option>';
+        }).join('');
+
+        html += '<div class="subcard">'
+             +    '<div class="small muted">'+esc(m.MarriageID)+'</div>'
+             +    '<div class="lbl">Spouse</div><input class="in" id="m_spouse_'+m.MarriageID+'" type="text" value="'+esc(m.SpouseName||'')+'">'
+             +    '<div class="row">'
+             +      '<div><div class="lbl">Date (MM-DD-YYYY)</div><input class="in" id="m_date_'+m.MarriageID+'" type="date" value="'+esc(m.MarriageDate||'')+'"></div>'
+             +      '<div><div class="lbl">Place</div><input class="in" id="m_place_'+m.MarriageID+'" type="text" value="'+esc(m.MarriagePlace||'')+'"></div>'
+             +    '</div>'
+             +    '<div class="lbl">Status</div>'
+             +    '<select class="in" id="m_status_'+m.MarriageID+'">'+statusOptions+'</select>'
+             +    '<div class="actions"><button class="btn" id="btnSaveM_'+m.MarriageID+'" onclick="saveMarriage(\''+m.MarriageID+'\')" disabled>Save</button><span class="status" id="stM_'+m.MarriageID+'"></span></div>'
+             +  '</div>';
+      });
+    }
+    html +=   '</div></div>';
+
+    /* CHILDREN */
+    html += '<div class="section" id="sec-children">'
+         +    '<div class="section-header" onclick="toggleSection(\'sec-children\')">'
+         +      '<h3>Children</h3><span class="chev">▸</span>'
+         +    '</div>'
+         +    '<div class="section-body">';
+    if(!children.length){
+      html += '<div class="small muted">None recorded.</div>';
+    }else{
+      children.forEach(c => {
+        var sel = [{ id:'', label:'— Out-of-wedlock / Not linked —' }].concat(
+          marriages.map(m => ({ id: m.MarriageID, label: (m.SpouseName || '(Unnamed spouse)') + ' [' + (m.MarriageID||'').slice(0,8) + ']' }))
+        ).map(function(opt){
+          var s = (String(opt.id) === String(c.MarriageID || '')) ? ' selected' : '';
+          return '<option value="'+esc(opt.id)+'"'+s+'>'+esc(opt.label)+'</option>';
+        }).join('');
+
+        html += '<div class="subcard">'
+             +    '<div class="small muted">'+esc(c.ChildID)+'</div>'
+             +    '<div class="lbl">Child Name</div><input class="in" id="c_name_'+c.ChildID+'" type="text" value="'+esc(c.ChildName||'')+'">'
+             +    '<div class="row">'
+             +      '<div><div class="lbl">Born (MM-DD-YYYY)</div><input class="in" id="c_born_'+c.ChildID+'" type="date" value="'+esc(c.BornDate||'')+'"></div>'
+             +      '<div><div class="lbl">Birth Place</div><input class="in" id="c_bplace_'+c.ChildID+'" type="text" value="'+esc(c.BornPlace||'')+'"></div>'
+             +    '</div>'
+             +    '<div class="row">'
+             +      '<div><div class="lbl">Died (MM-DD-YYYY)</div><input class="in" id="c_died_'+c.ChildID+'" type="date" value="'+esc(c.DiedDate||'')+'"></div>'
+             +      '<div><div class="lbl">Death Place</div><input class="in" id="c_dplace_'+c.ChildID+'" type="text" value="'+esc(c.DiedPlace||'')+'"></div>'
+             +    '</div>'
+             +    '<div class="lbl">Notes</div><textarea class="in ta" id="c_notes_'+c.ChildID+'">'+esc(c.Notes||'')+'</textarea>'
+             +    '<div class="row"><div><div class="lbl">Linked Marriage</div><select class="in" id="c_mid_'+c.ChildID+'">'+sel+'</select></div></div>'
+             +    '<div class="actions">'
+             +      '<button class="btn" id="btnSaveC_'+c.ChildID+'" onclick="saveChild(\''+c.ChildID+'\')" disabled>Save</button>'
+             +      '<button class="btn" id="btnRelinkC_'+c.ChildID+'" onclick="relinkChildUI(\''+c.ChildID+'\')" disabled>Relink</button>'
+             +      '<button class="btn danger" id="btnDelC_'+c.ChildID+'" onclick="deleteChildUI(\''+c.ChildID+'\')">Delete</button>'
+             +      '<span class="status" id="stC_'+c.ChildID+'"></span>'
+             +    '</div>'
+             +  '</div>';
+      });
+    }
+    html +=   '</div></div>';
+
+    qs('detail').innerHTML = html;
+
+    ['sec-person','sec-marriages','sec-children'].forEach(id=>{
+      const el = document.getElementById(id); if(el) el.classList.remove('collapsed');
+    });
+
+    wireDirtyTracking();
+  }
+
+  /* ====== DIRTY TRACKING ====== */
+  function wireDirtyTracking(){
+    const d = qs('detail');
+
+    ['p_dob','p_dod','p_pob','p_pod','p_parents','p_notes'].forEach(id => {
+      const el = qs(id);
+      if(!el) return;
+      el.addEventListener('input', function(){
+        const btn = qs('btnSavePerson');
+        if(btn) btn.disabled = false;
+        setStatus(qs('stPerson'), 'note', 'Editing…');
+        markDirty('sec-person');
+      });
+      el.addEventListener('change', function(){
+        const btn = qs('btnSavePerson');
+        if(btn) btn.disabled = false;
+        setStatus(qs('stPerson'), 'note', 'Editing…');
+        markDirty('sec-person');
+      });
+    });
+
+    function handleEditEvent(e){
+      const t = e.target;
+      if(!t || !t.id) return;
+
+      const m = t.id.match(/^m_(spouse|date|place|status)_(.+)$/);
+      if(m){
+        const mid = m[2];
+        const btn = qs('btnSaveM_'+mid), st = qs('stM_'+mid);
+        if(btn) btn.disabled = false;
+        if(st) setStatus(st, 'note', 'Editing…');
+        markDirty('sec-marriages');
+        return;
+      }
+
+      const c = t.id.match(/^c_(name|born|bplace|died|dplace|notes)_(.+)$/);
+      if(c){
+        const cid = c[2];
+        const btn = qs('btnSaveC_'+cid), st = qs('stC_'+cid);
+        if(btn) btn.disabled = false;
+        if(st) setStatus(st, 'note', 'Editing…');
+        markDirty('sec-children');
+        return;
+      }
+
+      const r = t.id.match(/^c_mid_(.+)$/);
+      if(r){
+        const cid = r[1];
+        const rBtn = qs('btnRelinkC_'+cid), st = qs('stC_'+cid);
+        if(rBtn) rBtn.disabled = false;
+        if(st) setStatus(st, 'note', 'Editing…');
+        markDirty('sec-children');
+        return;
+      }
+    }
+
+    d.addEventListener('input',  handleEditEvent);
+    d.addEventListener('change', handleEditEvent);
+  }
+
+  /* ====== SAVE / RELINK / DELETE ====== */
+  function savePerson(personId){
+    const st = qs('stPerson');
+    setStatus(st,'loading','Saving…');
+    const payload = {
+      personId: personId, fullName: '',
+      dob: qs('p_dob').value, pob: qs('p_pob').value.trim(),
+      dod: qs('p_dod').value, pod: qs('p_pod').value.trim(),
+      parents: qs('p_parents').value.trim(), notes: qs('p_notes').value.trim()
+    };
+    google.script.run
+      .withSuccessHandler(function(){
+        setStatus(st,'ok','Saved');
+        const btn = qs('btnSavePerson'); if(btn) btn.disabled = true;
+        clearDirty('sec-person');
+        refreshDetailWithScroll('Person updated');
+      })
+      .withFailureHandler(function(err){ showErr(err); setStatus(st,'err','Failed'); })
+      .updatePerson(payload);
+  }
+
+  function saveMarriage(mid){
+    const st = qs('stM_'+mid);
+    setStatus(st,'loading','Saving…');
+    const payload = {
+      marriageId: mid,
+      spouseName: qs('m_spouse_'+mid).value.trim(),
+      mDate: qs('m_date_'+mid).value,
+      mPlace: qs('m_place_'+mid).value.trim(),
+      status: qs('m_status_'+mid).value.trim()
+    };
+    google.script.run
+      .withSuccessHandler(function(){
+        setStatus(st,'ok','Saved');
+        const btn = qs('btnSaveM_'+mid); if(btn) btn.disabled = true;
+        clearDirty('sec-marriages');
+        refreshDetailWithScroll('Marriage updated');
+      })
+      .withFailureHandler(function(err){ showErr(err); setStatus(st,'err','Failed'); })
+      .updateMarriage(payload);
+  }
+
+  function saveChild(cid){
+    const st = qs('stC_'+cid);
+    setStatus(st,'loading','Saving…');
+    const payload = {
+      childId: cid,
+      marriageId: qs('c_mid_'+cid) ? qs('c_mid_'+cid).value : '',
+      childName: qs('c_name_'+cid).value.trim(),
+      bDate: qs('c_born_'+cid).value, bPlace: qs('c_bplace_'+cid).value.trim(),
+      dDate: qs('c_died_'+cid).value, dPlace: qs('c_dplace_'+cid).value.trim(),
+      notes: qs('c_notes_'+cid).value.trim()
+    };
+    google.script.run
+      .withSuccessHandler(function(){
+        setStatus(st,'ok','Saved');
+        const btn = qs('btnSaveC_'+cid); if(btn) btn.disabled = true;
+        clearDirty('sec-children');
+        refreshDetailWithScroll('Child updated');
+      })
+      .withFailureHandler(function(err){ showErr(err); setStatus(st,'err','Failed'); })
+      .updateChild(payload);
+  }
+
+  function relinkChildUI(cid){
+    const st   = qs('stC_'+cid);
+    const rBtn = qs('btnRelinkC_'+cid);
+    const newMid = qs('c_mid_'+cid).value;
+    setStatus(st,'loading','Relinking…');
+    google.script.run
+      .withSuccessHandler(function(){
+        setStatus(st,'ok','Re-linked');
+        if(rBtn) rBtn.disabled = true;
+        clearDirty('sec-children');
+        refreshDetailWithScroll('Child relinked');
+      })
+      .withFailureHandler(function(err){ showErr(err); setStatus(st,'err','Failed'); })
+      .relinkChild(cid, newMid);
+  }
+
+  function deleteChildUI(cid){
+    const st  = qs('stC_'+cid);
+    if(!confirm('Delete this child record? This cannot be undone.')) return;
+    setStatus(st,'loading','Deleting…');
+    google.script.run
+      .withSuccessHandler(function(){
+        setStatus(st,'ok','Deleted');
+        clearDirty('sec-children');
+        refreshDetailWithScroll('Child deleted');
+      })
+      .withFailureHandler(function(err){
+        showErr(err); setStatus(st,'err','Failed');
+      })
+      .deleteChild(cid);
+  }
+
+  /* ====== DELETE PERSON (impact preview + cascade) ====== */
+  function deletePersonUI(personId, fullName){
+    if(!personId) return;
+    const st = qs('stPerson');
+    setStatus(st,'loading','Checking…');
+
+    google.script.run
+      .withSuccessHandler(function(info){
+        if(!info || info.ok === false){
+          setStatus(st,'err','Not found');
+          alert((info && info.error) ? info.error : 'Person not found.');
+          return;
+        }
+
+        const m = Number(info.marriages || 0);
+        const c = Number(info.children  || 0);
+        const name = (info.person && info.person.name) ? info.person.name : (fullName || 'this person');
+
+        const msg =
+          'Delete "' + name + '"?\n\n' +
+          'This will also delete:\n' +
+          '• ' + m + ' marriage row(s)\n' +
+          '• ' + c + ' child row(s)\n\n' +
+          'You can Undo in Sheets immediately after.';
+
+        if(!confirm(msg)){ setStatus(st,'note',''); return; }
+
+        setStatus(st,'loading','Deleting…');
+        google.script.run
+          .withSuccessHandler(function(res){
+            if(!res || res.ok !== true){
+              setStatus(st,'err','Failed');
+              alert((res && res.error) ? ('Delete failed: ' + res.error) : 'Delete failed.');
+              return;
+            }
+            setStatus(st,'ok','Deleted');
+            qs('detail').innerHTML = '';
+            // refresh the list so the card disappears
+            doSearch();
+
+            const delM = (res.deleted && res.deleted.marriages) ? res.deleted.marriages.length : 0;
+            const delC = (res.deleted && res.deleted.children)  ? res.deleted.children.length  : 0;
+            alert('Deleted 1 person, ' + delM + ' marriage(s), ' + delC + ' child(ren).');
+          })
+          .withFailureHandler(function(err){ showErr(err); setStatus(st,'err','Failed'); })
+          // pass cascade flags so linked rows are removed too
+          .GX_deletePersonCascade(personId, true, true);
+      })
+      .withFailureHandler(function(err){ showErr(err); setStatus(st,'err','Failed'); })
+      .GX_getDeleteImpact(personId);
+  }
+</script>

@@ -1,0 +1,144 @@
+<?!= include('ui_common'); ?>
+<h2>Add Marriage</h2>
+
+<label>Person *</label>
+<div class="row">
+  <div>
+    <select id="personId" disabled>
+      <option value="">Loading…</option>
+    </select>
+  </div>
+  <div class="actions" style="margin-top:0;">
+    <span id="stPeople" class="status loading">Loading…</span>
+  </div>
+</div>
+
+<label>Spouse Full Name *</label>
+<input id="spouseName" type="text" placeholder="Full name" />
+
+<div class="row">
+  <div>
+    <label>Marriage Date</label>
+    <input id="mDate" type="date" />
+  </div>
+  <div>
+    <label>Marriage Place</label>
+    <input id="mPlace" type="text" placeholder="City, County, State, Country" />
+  </div>
+</div>
+
+<label>Status</label>
+<select id="status">
+  <option value="">—</option>
+  <option>Married</option>
+  <option>Divorced</option>
+  <option>Widowed</option>
+  <option>Unknown</option>
+</select>
+
+<div class="actions">
+  <button id="btnSave" class="primary" onclick="submitMarriage()">Save Marriage</button>
+  <span id="stSave" class="status"></span>
+</div>
+
+<div id="msg"></div>
+
+<script>
+  // Use qs / setBusy / setStatus from ui_common (already included)
+
+  function loadPeople(){
+    const sel = qs('personId');
+    const st  = qs('stPeople');
+    if (st) setStatus(st, 'loading', 'Loading…');
+
+    google.script.run
+      .withSuccessHandler(function(list){
+        sel.innerHTML = '<option value="">— Select Person —</option>';
+        (list || []).forEach(function(p){
+          const o = document.createElement('option');
+          o.value = p.id;
+          o.textContent = (p.name || '(Unnamed)') + ' [' + String(p.id||'').slice(0,8) + ']';
+          sel.appendChild(o);
+        });
+        sel.disabled = false;
+        if (st) st.innerHTML = ''; // clear pill
+      })
+      .withFailureHandler(function(err){
+        sel.innerHTML = '<option value="">(Failed to load)</option>';
+        sel.disabled = true;
+        if (st) setStatus(st, 'err', 'Load failed');
+        const m = qs('msg');
+        if (m) m.innerHTML = '<div class="err">' + (err && err.message ? err.message : 'Failed to load people') + '</div>';
+      })
+      .listPeople();
+  }
+
+  function normalizePlace(input){
+    const UNKNOWN = "Unknown";
+    if(!input) return UNKNOWN + ", " + UNKNOWN + ", " + UNKNOWN + ", " + UNKNOWN;
+    const parts = String(input).split(",").map(function(s){ return s.trim(); }).filter(function(s){ return s.length; });
+    const n = parts.length;
+    const country = n >= 1 ? parts[n-1] : UNKNOWN;
+    const state   = n >= 2 ? parts[n-2] : UNKNOWN;
+    const county  = n >= 3 ? parts[n-3] : UNKNOWN;
+    const city    = n >= 4 ? parts.slice(0, n-3).join(", ") : UNKNOWN;
+    return [city || UNKNOWN, county || UNKNOWN, state || UNKNOWN, country || UNKNOWN].join(", ");
+  }
+
+  function markEditing(){
+    const st = qs('stSave');
+    if (st) setStatus(st, 'note', 'Editing…');
+  }
+
+  // wire "Editing…" status when fields change
+  ['personId','spouseName','mDate','mPlace','status'].forEach(function(id){
+    const el = qs(id);
+    if (el) el.addEventListener('input', markEditing);
+    if (el) el.addEventListener('change', markEditing);
+  });
+
+  function submitMarriage(){
+    const btn = qs('btnSave');
+    const st  = qs('stSave');
+
+    const payload = {
+      personId: qs('personId').value,
+      spouseName: qs('spouseName').value.trim(),
+      mDate: qs('mDate').value,
+      mPlace: normalizePlace(qs('mPlace').value.trim()),
+      status: qs('status').value
+    };
+
+    if(!payload.personId || !payload.spouseName){
+      qs('msg').innerHTML = '<div class="err">Select person and enter spouse name.</div>';
+      return;
+    }
+
+    setBusy(btn, true);
+    setStatus(st, 'loading', 'Saving…');
+
+    google.script.run
+      .withSuccessHandler(function(res){
+        setBusy(btn, false);
+        if(res && res.ok){
+          setStatus(st, 'ok', 'Saved');
+          qs('msg').innerHTML = '';
+          qs('spouseName').value = '';
+          qs('mDate').value = '';
+          qs('mPlace').value = '';
+          qs('status').value = '';
+        } else {
+          setStatus(st, 'err', 'Failed');
+          qs('msg').innerHTML = '<div class="err">Save failed.</div>';
+        }
+      })
+      .withFailureHandler(function(err){
+        setBusy(btn, false);
+        setStatus(st, 'err', 'Failed');
+        qs('msg').innerHTML = '<div class="err">' + (err && err.message ? err.message : 'Error saving marriage') + '</div>';
+      })
+      .addMarriage(payload);
+  }
+
+  loadPeople();
+</script>

@@ -1,0 +1,191 @@
+<!-- Add Child (Person label shows name + [personId8]) -->
+<h2>Add Child</h2>
+
+<div class="card">
+  <div class="lbl">Person</div>
+  <select id="person" class="in" onchange="onPersonChange()">
+    <option value="">— Select a person —</option>
+  </select>
+
+  <div class="lbl" style="margin-top:10px;">Linked Marriage (optional)</div>
+  <select id="marriage" class="in">
+    <option value="">— Out-of-wedlock / Not linked —</option>
+  </select>
+
+  <div class="row" style="margin-top:10px;">
+    <div>
+      <div class="lbl">Child Name</div>
+      <input id="c_name" class="in" type="text" placeholder="Full name">
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="lbl">Born (MM-DD-YYYY)</div>
+      <input id="c_born" class="in" type="date">
+    </div>
+    <div>
+      <div class="lbl">Birth Place</div>
+      <input id="c_bplace" class="in" type="text" placeholder="City, County, State, Country">
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="lbl">Died (MM-DD-YYYY)</div>
+      <input id="c_died" class="in" type="date">
+    </div>
+    <div>
+      <div class="lbl">Death Place</div>
+      <input id="c_dplace" class="in" type="text" placeholder="City, County, State, Country">
+    </div>
+  </div>
+
+  <div class="lbl">Notes</div>
+  <textarea id="c_notes" class="in ta" placeholder="Notes…"></textarea>
+
+  <div class="actions">
+    <button class="btn primary" onclick="saveChild()">Add Child</button>
+    <span id="status" class="status"></span>
+  </div>
+</div>
+
+<style>
+  html, body { font-family: Roboto, Arial, "Segoe UI", Helvetica, sans-serif; font-size: 14px; line-height: 1.4; }
+  .card{border:1px solid #e0e0e0;border-radius:10px;padding:12px;margin:10px 0;background:#fff;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > div{flex:1 1 220px;min-width:200px;}
+  .lbl{font-size:12px;color:#555;margin:10px 0 4px;}
+  .in{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;}
+  .ta{min-height:80px;}
+  .actions{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;}
+  .btn{padding:8px 12px;border:0;border-radius:8px;font-weight:600;cursor:pointer;}
+  .btn.primary{background:#1a73e8;color:#fff;}
+  .status{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:6px;box-sizing:border-box;font-weight:600;line-height:1;}
+  .status.note{background:#f1f3f4;color:#5f6368;}
+  .status.loading{background:#f1f3f4;color:#5f6368;}
+  .status.ok{background:#e6f4ea;color:#0f9d58;}
+  .status.err{background:#fce8e6;color:#d93025;}
+  .status.loading::before{content:"";width:14px;height:14px;border:2px solid rgba(0,0,0,.25);border-top-color:rgba(0,0,0,.55);border-radius:50%;animation:spin .8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .status svg{width:16px;height:16px;display:block;}
+</style>
+
+<script>
+  function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function setStatus(type, text){
+    const el = document.getElementById('status');
+    if(!el) return;
+    if(type==='ok'){
+      el.className='status ok';
+      el.innerHTML='<svg viewBox="0 0 24 24"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg><span>'+(text||'Saved')+'</span>';
+    }else if(type==='err'){
+      el.className='status err';
+      el.textContent=text||'Failed';
+    }else if(type==='loading'){
+      el.className='status loading';
+      el.textContent=text||'Loading…';
+    }else{
+      el.className='status note';
+      el.textContent=text||'';
+    }
+  }
+
+  // Populate Person dropdown with "Name [abcdef12]" labels
+  function loadPeople(){
+    setStatus('loading','Loading people…');
+    google.script.run
+      .withSuccessHandler(function(items){
+        const sel = document.getElementById('person');
+        sel.innerHTML = '<option value="">— Select a person —</option>';
+        (items||[]).forEach(p => {
+          const id8 = String(p.id||'').slice(0,8);
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = (p.name||'(Unnamed)') + ' [' + id8 + ']';
+          sel.appendChild(opt);
+        });
+        setStatus('note','Pick a person to load marriages…');
+      })
+      .withFailureHandler(function(err){
+        setStatus('err', (err && err.message) ? err.message : 'Failed to load people');
+      })
+      .listPeople();
+  }
+
+  // When person changes, refresh the marriages list for that person
+  function onPersonChange(){
+    const pid = document.getElementById('person').value;
+    const mSel = document.getElementById('marriage');
+    mSel.innerHTML = '<option value="">— Out-of-wedlock / Not linked —</option>';
+    if(!pid){ setStatus('note',''); return; }
+
+    setStatus('loading','Loading marriages…');
+    google.script.run
+      .withSuccessHandler(function(items){
+        // items already include the "out-of-wedlock" option first from backend,
+        // but we’ve provided one above too; we’ll rebuild from items to be safe.
+        mSel.innerHTML = '';
+        (items||[]).forEach(it => {
+          const id8 = String(it.id||'').slice(0,8);
+          const opt = document.createElement('option');
+          opt.value = it.id;
+          opt.textContent = it.id ? ( (it.label||'(Unnamed spouse)') + ' [' + id8 + ']' )
+                                  : (it.label || '— Out-of-wedlock / Not linked —');
+          mSel.appendChild(opt);
+        });
+        setStatus('note','Ready');
+      })
+      .withFailureHandler(function(err){
+        setStatus('err', (err && err.message) ? err.message : 'Failed to load marriages');
+      })
+      .listMarriages(pid);
+  }
+
+  function saveChild(){
+    const pid = document.getElementById('person').value;
+    const mid = document.getElementById('marriage').value;
+    const name = document.getElementById('c_name').value.trim();
+    const b    = document.getElementById('c_born').value;
+    const bp   = document.getElementById('c_bplace').value.trim();
+    const d    = document.getElementById('c_died').value;
+    const dp   = document.getElementById('c_dplace').value.trim();
+    const notes= document.getElementById('c_notes').value.trim();
+
+    if(!pid){
+      alert('Please select a person first.');
+      return;
+    }
+    if(!name){
+      alert('Please enter the child’s name.');
+      return;
+    }
+
+    setStatus('loading','Saving…');
+    google.script.run
+      .withSuccessHandler(function(){
+        setStatus('ok','Child added');
+        // quick reset (keep person/marriage so you can add another)
+        document.getElementById('c_name').value='';
+        document.getElementById('c_born').value='';
+        document.getElementById('c_bplace').value='';
+        document.getElementById('c_died').value='';
+        document.getElementById('c_dplace').value='';
+        document.getElementById('c_notes').value='';
+      })
+      .withFailureHandler(function(err){
+        setStatus('err', (err && err.message) ? err.message : 'Failed to add child');
+      })
+      .addChild({
+        personId: pid,
+        marriageId: mid || '',
+        childName: name,
+        bDate: b, bPlace: bp,
+        dDate: d, dPlace: dp,
+        notes: notes
+      });
+  }
+
+  // init
+  loadPeople();
+</script>

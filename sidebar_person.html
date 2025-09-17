@@ -1,0 +1,113 @@
+<?!= include('ui_common'); ?>
+<h2>Add Person</h2>
+<div class="hint">Fields marked with * are recommended.</div>
+
+<label>Full Name *</label>
+<input id="fullName" type="text" placeholder="First Middle Last" />
+
+<div class="row">
+  <div>
+    <label>Date of Birth (MM-DD-YYYY)</label>
+    <input id="dob" type="date" />
+  </div>
+  <div>
+    <label>Date of Death (MM-DD-YYYY)</label>
+    <input id="dod" type="date" />
+  </div>
+</div>
+
+<div class="row">
+  <div>
+    <label>Place of Birth</label>
+    <input id="pob" type="text" placeholder="City, State, Country" />
+  </div>
+  <div>
+    <label>Place of Death</label>
+    <input id="pod" type="text" placeholder="City, State, Country" />
+  </div>
+</div>
+
+<label>Parents</label>
+<input id="parents" type="text" placeholder="Parent A & Parent B" />
+
+<label>Notes</label>
+<textarea id="notes" placeholder="Occupation, service, stories…"></textarea>
+
+<div class="actions">
+  <button class="primary" onclick="submitPerson()">Save Person</button>
+  <button class="secondary" onclick="resetForm()">Clear</button>
+</div>
+
+<div id="msg"></div>
+
+<script>
+// Provide qs locally (ui_common may already define it; this is harmless)
+function qs(sel){ return document.querySelector(sel); }
+
+/**
+ * Normalize a comma-separated place string by right-aligning tokens and
+ * filling missing slots with "Unknown".
+ * Example with fields=3 ("City, State, Country"):
+ *   "Ohio, USA"        -> "Unknown, Ohio, USA"
+ *   "Dallas, USA"      -> "Unknown, Dallas, USA"
+ *   "USA"              -> "Unknown, Unknown, USA"
+ *   "Paris, Île-de-France, France" -> "Paris, Île-de-France, France"
+ * Extra leading tokens collapse into the first slot (City).
+ */
+function normalizePlace(input, fields){
+  const UNKNOWN = "Unknown";
+  const N = Math.max(1, fields|0 || 3); // default to 3 fields for person
+  if(!input) return Array(N).fill(UNKNOWN).join(", ");
+
+  const parts = input.split(",").map(s => s.trim()).filter(Boolean);
+  const n = parts.length;
+
+  if(n === 0) return Array(N).fill(UNKNOWN).join(", ");
+
+  // If we have at least N tokens, fold the extras into the first (City)
+  if(n >= N){
+    const city = parts.slice(0, n - (N - 1)).join(", ");
+    const tail = parts.slice(n - (N - 1)); // last N-1 tokens
+    const out = [city, ...tail];
+    // Replace any empties defensively
+    return out.map(x => x || UNKNOWN).join(", ");
+  }
+
+  // If we have fewer than N tokens, right-align them and fill left with Unknown
+  const out = Array(N).fill(UNKNOWN);
+  for(let i = 0; i < n; i++){
+    out[N - 1 - i] = parts[n - 1 - i] || UNKNOWN;
+  }
+  return out.join(", ");
+}
+
+function resetForm(){
+  ['fullName','dob','dod','pob','pod','parents','notes'].forEach(id=>qs('#'+id).value='');
+  qs('#msg').innerHTML='';
+}
+
+function submitPerson(){
+  const payload = {
+    fullName: qs('#fullName').value.trim(),
+    dob: qs('#dob').value,
+    pob: normalizePlace(qs('#pob').value.trim(), 3), // City, State, Country
+    dod: qs('#dod').value,
+    pod: normalizePlace(qs('#pod').value.trim(), 3), // City, State, Country
+    parents: qs('#parents').value.trim(),
+    notes: qs('#notes').value.trim()
+  };
+  if(!payload.fullName){
+    qs('#msg').innerHTML = '<div class="err">Full Name is required.</div>'; return;
+  }
+  google.script.run.withSuccessHandler(function(res){
+    if(res && res.ok){
+      qs('#msg').innerHTML = '<div class="ok">Saved. PersonID: <b>'+res.personId+'</b></div>';
+      resetForm();
+    } else {
+      qs('#msg').innerHTML = '<div class="err">Save failed.</div>';
+    }
+  }).withFailureHandler(function(err){
+    qs('#msg').innerHTML = '<div class="err">'+err.message+'</div>';
+  }).addPerson(payload);
+}
+</script>

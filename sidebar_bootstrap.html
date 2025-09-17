@@ -1,0 +1,10 @@
+<?!= include('ui_common'); ?>
+<div class="muted small">Sizing sidebar…</div>
+<script>
+  (function(){
+    var vw = Math.max( (window.innerWidth || 0), (screen && screen.width) || 0 );
+    // Use ~40% of viewport, clamped server-side to 560–900px
+    var suggested = Math.round(vw * 0.40);
+    google.script.run.openSearchEditAt(suggested);
+  })();
+</script>

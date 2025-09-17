@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8"/>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+      body { font-family: sans-serif; margin: 20px; background: #fff; }
+      svg { overflow: visible; }
+
+      .bar { fill-opacity: 0.7; transition: filter .15s, opacity .15s; cursor: pointer; }
+      .bar:hover { filter: brightness(1.06); opacity: .95; }
+
+      .grid line, .grid path,
+      .birth-line, .birth-label, .axis text, .label { pointer-events: none; }
+      .hit { cursor: pointer; }
+
+      .tooltip {
+        position: absolute; background: #fff; border: 1px solid #ccc; padding: 10px;
+        font-size: 14px; max-width: 340px; line-height: 1.4; box-shadow: 2px 2px 8px rgba(0,0,0,.1);
+        pointer-events: auto; z-index: 10; opacity: 0;
+      }
+
+      .axis text { font-size: 12px; }
+      .grid line { stroke: #e0e0e0; stroke-opacity: 1; shape-rendering: crispEdges; }
+      .grid path { display: none; }
+
+      .controls { margin-bottom: 10px; }
+      .controls label, .controls button { margin-right: 10px; }
+      .filters { margin-bottom: 15px; }
+      .filters label { margin-right: 10px; }
+
+      #loading-message { font-size: 16px; color: #444; margin-bottom: 10px; }
+      .spinner {
+        border: 4px solid #ccc; border-top: 4px solid #333; border-radius: 50%;
+        width: 20px; height: 20px; animation: spin 1s linear infinite;
+        display: inline-block; vertical-align: middle; margin-right: 8px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      @media print {
+        .controls, .filters, h2, #loading-message { display: none; }
+        body { margin: 0; }
+        svg { width: 100%; }
+      }
+
+      /* Dark mode */
+      body.dark-mode { background: #121212; color: #f0f0f0; }
+      body.dark-mode .axis text, body.dark-mode .grid line { stroke: #888; fill: #f0f0f0; }
+      body.dark-mode .bar { fill-opacity: .85; }
+      body.dark-mode .tooltip { background: #222; color: #eee; border-color: #555; }
+      body.dark-mode .grid line { stroke: #444; }
+
+      /* Buttons */
+      button {
+        background-color: #4a90e2; color: white; border: none; border-radius: 6px;
+        padding: 6px 14px; font-size: 14px; font-weight: 500; cursor: pointer;
+        transition: background-color .2s, box-shadow .2s;
+      }
+      button:hover  { background-color: #3f7ecf; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+      button:active { background-color: #366fb8; }
+      button:disabled { background-color: #ccc; cursor: not-allowed; }
+
+      .controls label {
+        display: inline-flex; align-items: center; background-color: #f5f5f5;
+        border-radius: 6px; padding: 4px 8px; font-size: 14px; cursor: pointer;
+        transition: background-color .2s, box-shadow .2s;
+      }
+      .controls label:hover { background-color: #e8e8e8; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+      .controls input[type="checkbox"] { margin-right: 6px; }
+
+      :root { --birth-color: #009688; }
+      body.dark-mode { --birth-color: #4dd0e1; }
+      .birth-line  { stroke: var(--birth-color); stroke-width: 1.2px; stroke-dasharray: 2,4; }
+      .birth-label { fill:   var(--birth-color); font-size: 10.5px; text-anchor: start; }
+
+      /* Brush */
+      .brush .selection { fill: rgba(59,130,246,.15); stroke: #3b82f6; }
+      .brush .overlay { cursor: crosshair; }
+
+      /* --- Tooltip layout enhancements --- */
+      .tt { max-width: 360px; }
+      .tt-title { font-weight: 700; margin-bottom: 6px; }
+      .tt-muted { font-style: italic; color: #666; }
+      body.dark-mode .tt-muted { color: #bbb; }
+      .tt-row { margin: 4px 0; }
+      .tt-lbl { text-decoration: underline; font-weight: 600; margin-right: 6px; }
+      .tt-children { margin: 4px 0 0 0; padding-left: 16px; }
+      .tt-children li { margin: 2px 0; }
+    </style>
+  </head>
+  <body>
+    <h2>📜 <?!= family ?> Family Timeline</h2>
+
+    <div id="loading-message">
+      <span class="spinner"></span>Loading family data...
+    </div>
+
+    <div class="controls">
+      <button id="checkAll">✅ Check All</button>
+      <button id="uncheckAll">🚫 Uncheck All</button>
+      <button id="printView">🖨️ Print</button>
+      <label><input type="checkbox" id="toggleBirthStates"> Show Birth States</label>
+      <label><input type="checkbox" id="toggleDarkMode"> Dark Mode</label>
+      <button id="resetZoom" disabled>⤺ Reset Zoom</button>
+    </div>
+
+    <div class="filters" id="filters"></div>
+    <svg width="1400"></svg>
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+      const FAMILY = '<?!= family ?>' || 'All';
+
+      let people = [];
+      const svg = d3.select("svg");
+      const tooltip = d3.select("#tooltip");
+
+      const margin = { top: 120, right: 180, bottom: 40, left: 150 };
+
+      const generationColorsLight = d3.scaleOrdinal(d3.schemeTableau10);
+      const generationColorsDark  = d3.scaleOrdinal([
+        "#7FDBFF","#FFDC00","#2ECC40","#FF851B","#B10DC9",
+        "#FF4136","#39CCCC","#F012BE","#01FF70","#0074D9"
+      ]);
+
+      const currentYear = new Date().getFullYear();
+      const PLACEHOLDER_W = 90;
+      const BRUSH_HEIGHT = 28;
+      let zoomDomain = null;
+
+      const US_STATES = new Map([
+        ["alabama","AL"],["alaska","AK"],["arizona","AZ"],["arkansas","AR"],["california","CA"],
+        ["colorado","CO"],["connecticut","CT"],["delaware","DE"],["florida","FL"],["georgia","GA"],
+        ["hawaii","HI"],["idaho","ID"],["illinois","IL"],["indiana","IN"],["iowa","IA"],
+        ["kansas","KS"],["kentucky","KY"],["louisiana","LA"],["maine","ME"],["maryland","MD"],
+        ["massachusetts","MA"],["michigan","MI"],["minnesota","MN"],["mississippi","MS"],["missouri","MO"],
+        ["montana","MT"],["nebraska","NE"],["nevada","NV"],["new hampshire","NH"],["new jersey","NJ"],
+        ["new mexico","NM"],["new york","NY"],["north carolina","NC"],["north dakota","ND"],["ohio","OH"],
+        ["oklahoma","OK"],["oregon","OR"],["pennsylvania","PA"],["rhode island","RI"],["south carolina","SC"],
+        ["south dakota","SD"],["tennessee","TN"],["texas","TX"],["utah","UT"],["vermont","VT"],
+        ["virginia","VA"],["washington","WA"],["west virginia","WV"],["wisconsin","WI"],["wyoming","WY"],
+        ["district of columbia","DC"]
+      ]);
+
+      function safeNumber(v) {
+        if (v === null || v === undefined || v === "") return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+
+      function computeDisplayAge(d) {
+        const died  = safeNumber(d.age_at_death);
+        if (died != null) return died;
+        const alive = safeNumber(d.current_age_if_alive);
+        return alive != null ? alive : null;
+      }
+      const hasBorn = d => Number.isFinite(safeNumber(d.born));
+      const hasDied = d => Number.isFinite(safeNumber(d.died));
+      const isIncomplete = d => !hasBorn(d) || !hasDied(d);
+
+      function segStart(d, x) {
+        if (hasBorn(d) && hasDied(d)) return x(safeNumber(d.born));
+        if (hasBorn(d) && !hasDied(d)) return x(safeNumber(d.born));
+        if (!hasBorn(d) && hasDied(d)) return x(safeNumber(d.died)) - PLACEHOLDER_W;
+        return x.range()[0];
+      }
+      function segEnd(d, x) {
+        if (hasBorn(d) && hasDied(d)) return x(safeNumber(d.died));
+        if (hasBorn(d) && !hasDied(d)) return x(safeNumber(d.born)) + PLACEHOLDER_W;
+        if (!hasBorn(d) && hasDied(d)) return x(safeNumber(d.died));
+        return x.range()[0] + PLACEHOLDER_W;
+      }
+
+      function tooltipSuffix(d) {
+        if (isIncomplete(d)) return ' (incomplete dates)';
+        const a = computeDisplayAge(d);
+        if (a === 0) {
+          const b = safeNumber(d.born), dd = safeNumber(d.died);
+          if (b != null && dd != null && b === dd) return ' (infant)';
+          return '';
+        }
+        return a != null ? ` (${a} years)` : '';
+      }
+      function labelSuffix(d) {
+        if (isIncomplete(d)) return ' (incomplete dates)';
+        const a = computeDisplayAge(d);
+        if (a === 0) {
+          const b = safeNumber(d.born), dd = safeNumber(d.died);
+          if (b != null && dd != null && b === dd) return ' (infant)';
+          return '';
+        }
+        return a != null ? ` (${a})` : '';
+      }
+
+      function extractBirthState(meta) {
+        if (!meta) return null;
+        const bornPart = meta.split(/•|—|-/).find(s => /born:/i.test(s));
+        if (!bornPart) return null;
+        const afterBorn = (bornPart.split(/born:/i)[1] || "").trim();
+        const parts = afterBorn.split(",").map(s => s.trim()).filter(Boolean);
+        const COUNTRY_WORDS = /usa|u\.s\.a\.|united states|canada|ireland|england|scotland|wales|mexico/i;
+        const clean = parts.filter(p => !COUNTRY_WORDS.test(p));
+        if (!clean.length) return null;
+        for (let i = clean.length - 1; i >= 0; i--) {
+          const token = clean[i].replace(/\./g, "").toLowerCase();
+          if (US_STATES.has(token)) return US_STATES.get(token);
+          if (/^[A-Z]{2}$/.test(clean[i])) return clean[i];
+        }
+        return clean[clean.length - 1];
+      }
+
+      function grabMeta(meta, key) {
+        if (!meta) return "";
+        const rx = new RegExp(key + "\\s*:\\s*(.*?)(?:[•|—|-]|$)", "i");
+        const m = meta.match(rx);
+        return m ? m[1].trim().replace(/[•|—|-]\s*$/,'') : "";
+      }
+      function cleanVal(s) {
+        if (!s) return "";
+        return String(s)
+          .replace(/^\s*(Spouse|Married|Divorced)\s*:\s*/i, "")
+          .replace(/[•—-]\s*$/,"")
+          .trim();
+      }
+      function parseSpouseSeries(spouseStr) {
+        if (!spouseStr) return [];
+        const s = String(spouseStr).trim();
+        const results = [];
+        const re = /Spouse\s*:\s*([^•—-]*?)(?:\s*[•—-]\s*Married\s*:\s*([^•—-]*?))?(?:\s*[•—-]\s*Divorced\s*:\s*([^•—-]*?))?(?=\s*(?:•|$))/gi;
+        let m;
+        while ((m = re.exec(s)) && results.length < 5) {
+          const spouse   = cleanVal(m[1]);
+          const married  = cleanVal(m[2] || "");
+          const divorced = cleanVal(m[3] || "");
+          if (spouse || married || divorced) results.push({ spouse, married, divorced });
+        }
+        return results;
+      }
+
+      try {
+        google.script.run
+          .withSuccessHandler(data => {
+            document.getElementById('loading-message').style.display = 'none';
+            people = data || [];
+
+            const allGenerations = Array.from(new Set(people.map(p => p.generation))).sort((a,b)=>a-b);
+            const filters = d3.select("#filters").html("");
+            allGenerations.forEach(gen => {
+              filters.append("label").html(`
+                <input type="checkbox" class="gen-filter" value="${gen}" checked>
+                Gen ${gen}
+              `);
+            });
+            document.querySelectorAll('.gen-filter').forEach(el => el.addEventListener('change', render));
+
+            document.getElementById('checkAll').addEventListener('click', () => { document.querySelectorAll('.gen-filter').forEach(el => el.checked = true); render(); });
+            document.getElementById('uncheckAll').addEventListener('click', () => { document.querySelectorAll('.gen-filter').forEach(el => el.checked = false); render(); });
+            document.getElementById('printView').addEventListener('click', () => window.print());
+            document.getElementById('toggleBirthStates').addEventListener('change', render);
+            document.getElementById('toggleDarkMode').addEventListener('change', function () {
+              document.body.classList.toggle('dark-mode', this.checked);
+              render();
+            });
+            document.getElementById('resetZoom').addEventListener('click', () => {
+              zoomDomain = null;
+              document.getElementById('resetZoom').disabled = false;
+              render();
+            });
+
+            render();
+          })
+          .withFailureHandler(err => {
+            console.error(err);
+            const m = document.getElementById('loading-message');
+            m.textContent = '❌ Failed to load data.';
+            m.style.color = '#d00';
+          })
+          .getPeopleData(FAMILY);
+      } catch (e) {
+        const m = document.getElementById('loading-message');
+        m.textContent = '❌ Failed to initialize page.';
+        m.style.color = '#d00';
+        console.error(e);
+      }
+
+      function render() {
+        const svgSel = svg;
+        svgSel.selectAll(".main-group").remove();
+
+        const selectedGenerations = Array.from(document.querySelectorAll('.gen-filter:checked')).map(el => +el.value);
+        const filtered = people
+          .filter(p => selectedGenerations.includes(p.generation))
+          .sort((a,b) => (a.generation !== b.generation ? a.generation - b.generation : (safeNumber(a.born) ?? 0) - (safeNumber(b.born) ?? 0)));
+
+        const barHeight = 25;
+        const height = filtered.length * barHeight;
+        const width = +svgSel.attr("width") - margin.left - margin.right;
+
+        const y = d3.scaleBand().domain(filtered.map((_, i) => i)).range([0, height]).padding(0.4);
+        svgSel.attr("height", height + margin.top + margin.bottom + 24);
+
+        const g = svgSel.append("g").attr("class", "main-group").attr("transform", `translate(${margin.left},${margin.top})`);
+
+        const rows = filtered.length ? filtered : people;
+        const years = [];
+        rows.forEach(p => {
+          const b = safeNumber(p.born);
+          const d = safeNumber(p.died);
+          if (b != null) years.push(b);
+          if (b != null) years.push(d != null ? d : currentYear);
+        });
+        let baseMin, baseMax;
+        if (!years.length) { baseMin = currentYear - 50; baseMax = currentYear + 10; }
+        else { baseMin = Math.min(...years); baseMax = Math.max(...years); }
+        const PAD = 5;
+        baseMin = Math.floor((baseMin - PAD) / 10) * 10;
+        baseMax = Math.ceil((baseMax + PAD) / 10) * 10;
+        if (baseMax <= baseMin) baseMax = baseMin + 10;
+
+        let domainMin = baseMin, domainMax = baseMax;
+        if (zoomDomain) {
+          domainMin = Math.max(baseMin, Math.floor(zoomDomain[0]));
+          domainMax = Math.min(baseMax, Math.ceil(zoomDomain[1]));
+          if (domainMax - domainMin < 2) domainMax = domainMin + 2;
+        }
+        const x = d3.scaleLinear().domain([domainMin, domainMax]).range([0, width]);
+
+        const span = domainMax - domainMin;
+        let step = 10; if (span <= 60) step = 5; if (span <= 20) step = 2; if (span <= 10) step = 1;
+        const ticks = d3.range(Math.ceil(domainMin / step) * step, Math.floor(domainMax / step) * step + 1, step);
+
+        g.append("g").attr("class", "axis").call(d3.axisTop(x).tickValues(ticks).tickFormat(d3.format("d")));
+        g.append("g").attr("class", "grid").call(d3.axisTop(x).tickValues(ticks).tickSize(-height).tickFormat(""));
+
+        const brush = d3.brushX()
+          .extent([[0, -BRUSH_HEIGHT], [width, 0]])
+          .on("end", ({selection}) => {
+            if (!selection) return;
+            const [x0, x1] = selection.map(x.invert);
+            if (Math.abs(x1 - x0) < 1) { g.select(".brush").call(brush.move, null); return; }
+            zoomDomain = [x0, x1];
+            document.getElementById('resetZoom').disabled = false;
+            g.select(".brush").call(brush.move, null);
+            render();
+          });
+        g.append("g").attr("class", "brush").call(brush);
+
+        const colorScale = document.body.classList.contains('dark-mode') ? generationColorsDark : generationColorsLight;
+
+        const showBirthStates = document.getElementById('toggleBirthStates').checked;
+        const birthMarkers = filtered.map((p,i)=>({ year: safeNumber(p.born), label: extractBirthState(p.meta), i }))
+                                    .filter(d => d.year != null && !!d.label);
+        const bg = g.selectAll(".birth-group").data(showBirthStates ? [birthMarkers] : []).join(enter =>
+          enter.append("g").attr("class", "birth-group")
+        );
+        const birthBaseY = -margin.top + 10, birthStep = 14, birthRows = 5;
+        bg.selectAll(".birth-line").data(showBirthStates ? birthMarkers : []).join("line")
+          .attr("class", "birth-line")
+          .attr("x1", d => x(d.year)).attr("x2", d => x(d.year))
+          .attr("y1", d => birthBaseY + (d.i % birthRows) * birthStep + 6)
+          .attr("y2", d => y(d.i) + y.bandwidth() / 2);
+        bg.selectAll(".birth-label").data(showBirthStates ? birthMarkers : []).join("text")
+          .attr("class", "birth-label")
+          .attr("x", d => x(d.year) + 5)
+          .attr("y", d => birthBaseY + (d.i % birthRows) * birthStep + 4)
+          .text(d => `${d.label}`);
+
+        g.append("g").selectAll("text").data(filtered).join("text")
+          .attr("x", -10).attr("y", (_, i) => y(i)).attr("dy", `${Math.round(y.bandwidth()/2)+1}px`)
+          .attr("text-anchor", "end").attr("alignment-baseline", "middle")
+          .attr("fill", d => colorScale(d.generation)).attr("font-size", "12px").attr("font-weight", "bold")
+          .text(d => `Gen ${d.generation}`);
+
+        let tooltipTimeout, isHoveringTooltip = false;
+        tooltip.on("mouseover", () => { isHoveringTooltip = true; clearTimeout(tooltipTimeout); })
+               .on("mouseout",  () => { isHoveringTooltip = false; tooltipTimeout = setTimeout(() => { if (!isHoveringTooltip) tooltip.style("opacity", 0); }, 300); });
+
+        const barsG = g.append("g").attr("class", "bars");
+        const pillR = Math.min(y.bandwidth()/2, 12);
+        barsG.selectAll(".bar").data(filtered).join("rect")
+          .attr("class", "bar")
+          .attr("x", d => segStart(d, x))
+          .attr("y", (_, i) => y(i))
+          .attr("width", d => Math.max(1, segEnd(d, x) - segStart(d, x)))
+          .attr("height", y.bandwidth())
+          .attr("rx", d => Math.min(pillR, (segEnd(d, x) - segStart(d, x)) / 2))
+          .attr("ry", d => Math.min(pillR, (segEnd(d, x) - segStart(d, x)) / 2))
+          .attr("fill", d => colorScale(d.generation))
+          .attr("fill-opacity", d => isIncomplete(d) ? 0.35 : 0.7)
+          .on("mouseover", function(event, d) {
+            clearTimeout(tooltipTimeout);
+            tooltip.style("opacity", .95).html(buildTooltipHTML(d))
+              .style("left", Math.min(event.pageX + 10, window.innerWidth - 380) + "px")
+              .style("top", event.pageY + 10 + "px");
+          })
+          .on("mouseout", () => {
+            tooltipTimeout = setTimeout(() => { if (!isHoveringTooltip) tooltip.style("opacity", 0); }, 300);
+          });
+
+        const hitsG = g.append("g").attr("class", "hits");
+        hitsG.selectAll(".hit").data(filtered).join("rect")
+          .attr("class", "hit")
+          .attr("y", (_, i) => Math.max(0, y(i) - 3)).attr("height", y.bandwidth() + 6)
+          .attr("x", d => Math.max(0, segStart(d, x) - 60))
+          .attr("width", d => {
+            const start = segStart(d, x), end = segEnd(d, x);
+            const barW = Math.max(1, end - start);
+            const hitX = Math.max(0, start - 60);
+            return Math.min(width - hitX, barW + 120);
+          })
+          .attr("fill", "transparent")
+          .on("mouseover", function(event, d) {
+            clearTimeout(tooltipTimeout);
+            tooltip.style("opacity", .95).html(buildTooltipHTML(d))
+              .style("left", Math.min(event.pageX + 10, window.innerWidth - 380) + "px")
+              .style("top", event.pageY + 10 + "px");
+          })
+          .on("mouseout", () => {
+            tooltipTimeout = setTimeout(() => { if (!isHoveringTooltip) tooltip.style("opacity", 0); }, 300);
+          });
+
+        barsG.raise(); hitsG.raise();
+
+        g.selectAll(".label").data(filtered).join("text")
+          .attr("class", "label")
+          .attr("y", (_, i) => y(i)).attr("dy", `${Math.round(y.bandwidth()/2)+1}px`)
+          .attr("font-size", "12px").attr("alignment-baseline", "middle")
+          .attr("fill", document.body.classList.contains('dark-mode') ? "#fff" : "#000")
+          .each(function(d){
+            const name = `${d.name}${labelSuffix(d)}`;
+            const approx = name.length * 6.5;
+            const startX = segStart(d, x) + 5;
+            const endX   = segEnd(d, x) - 5;
+            const tooWide = startX + approx > width;
+            d3.select(this)
+              .attr("x", tooWide ? Math.min(endX, width - 6) : startX)
+              .attr("text-anchor", tooWide ? "end" : "start")
+              .text(name);
+          });
+      }
+
+      function buildTooltipHTML(d) {
+        const title = `<div class="tt-title">${d.name}${tooltipSuffix(d) || ""}</div>`;
+        const born  = grabMeta(d.meta, "Born");
+        const died  = grabMeta(d.meta, "Died");
+        const kids  = Array.isArray(d.children) ? d.children.filter(Boolean) : [];
+
+        const rows = [];
+        if (d.lifespan) rows.push(`<div class="tt-row"><span class="tt-lbl">Lifespan</span><span>${d.lifespan}</span></div>`);
+        if (d.decade)   rows.push(`<div class="tt-row"><span class="tt-lbl">Decade</span><span>${d.decade}</span></div>`);
+        if (born)       rows.push(`<div class="tt-row"><span class="tt-lbl">Born</span><span>${born}</span></div>`);
+        if (died)       rows.push(`<div class="tt-row"><span class="tt-lbl">Died</span><span>${died}</span></div>`);
+
+        // Spouses (prefer structured array from server; fallback to parsing legacy string)
+        const spouseBlocks = Array.isArray(d.spouses) && d.spouses.length
+          ? d.spouses
+          : parseSpouseSeries(d.spouse); // keep your existing parser around as a backup
+
+        if (spouseBlocks.length) {
+          spouseBlocks.forEach((blk, idx) => {
+            const n = idx + 1;
+            if (blk.spouse)   rows.push(`<div class="tt-row"><span class="tt-lbl">Spouse ${n}</span><span>${blk.spouse}</span></div>`);
+            if (blk.married)  rows.push(`<div class="tt-row"><span class="tt-lbl">Married ${n}</span><span>${blk.married}</span></div>`);
+            if (blk.divorced) rows.push(`<div class="tt-row"><span class="tt-lbl">Divorced ${n}</span><span>${blk.divorced}</span></div>`);
+          });
+        } else if (d.spouse) {
+          // last-ditch: show the raw string
+          rows.push(`<div class="tt-row"><span class="tt-lbl">Spouse(s)</span><span>${String(d.spouse)}</span></div>`);
+        }
+
+
+        rows.push(`<div class="tt-row"><span class="tt-lbl">Children</span></div>`);
+        if (kids.length) rows.push(`<ul class="tt-children">${kids.map(k => `<li>${k}</li>`).join("")}</ul>`);
+        else rows.push(`<div class="tt-row">None</div>`);
+
+        return `<div class="tt">${title}${rows.join("")}</div>`;
+      }
+
+      document.getElementById('toggleDarkMode').addEventListener('change', function () {
+        document.body.classList.toggle('dark-mode', this.checked);
+      });
+    </script>
+  </body>
+</html>

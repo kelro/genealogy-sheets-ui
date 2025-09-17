@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Node (if you later add build tooling)
+node_modules/
+dist/
+
+# Apps Script clasp (if adopted later)
+.clasp.json
+appsscript.json
+
+# Logs / temp exports
+*.log
+*.tmp
+*.bak

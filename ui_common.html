@@ -1,0 +1,162 @@
+<style>
+  /* === Font normalization === */
+  html, body {
+    font-family: Roboto, Arial, "Segoe UI", Helvetica, sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  /* Make all controls inherit the same font */
+  input, button, select, textarea, .btn, .status, .section-header h3 { font: inherit; }
+
+  body { padding: 12px; }
+  h2 { margin: 0 0 10px; font-size: 18px; }
+  label { display:block; margin: 10px 0 4px; font-weight: 500; }
+
+  /* Inputs */
+  input[type="text"], input[type="date"], textarea, select {
+    width: 100%; box-sizing: border-box; padding: 8px;
+    border: 1px solid #ccc; border-radius: 6px;
+  }
+  textarea { min-height: 80px; }
+
+  /* Layout */
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1 1 220px; min-width:200px; }
+
+  .card { border:1px solid #e0e0e0; border-radius:10px; padding:12px; margin:10px 0; background:#fff; }
+  .card .card { background:#fafafa; }
+
+  /* Action row: keep steady height to prevent jumping */
+  .actions {
+    margin-top:14px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+    min-height: 42px; /* reserve vertical space so spinner/status changes don't bounce */
+  }
+
+  /* Buttons */
+  button, .btn {
+    padding:8px 12px; border:0; border-radius:8px; cursor:pointer; font-weight:600;
+    position: relative;           /* allow in-button spinner */
+    padding-right: 28px;          /* reserve space for spinner even when idle */
+    line-height: 1;               /* consistent vertical centering */
+  }
+  button.primary, .btn.primary { background:#1a73e8; color:#fff; }
+  button.secondary { background:#f1f3f4; color:#202124; }
+  button.danger, .btn.danger { background:#d93025; color:#fff; }
+  button:disabled, .btn:disabled { opacity:.6; cursor:not-allowed; }
+
+  /* Status pill (fixed footprint, no wrap) */
+  .status{
+    display:inline-flex; align-items:center; gap:6px;
+    height: var(--ctl-h, 36px);
+    padding: 0 10px;
+    border-radius:6px; font-weight:600; line-height:1; box-sizing:border-box;
+    min-width: 120px;            /* prevents width wobble when text changes */
+    white-space: nowrap;         /* avoid wrapping */
+  }
+  .status.ok  { background:#e6f4ea; color:#0f9d58; }
+  .status.err { background:#fce8e6; color:#d93025; }
+  .status svg { width:16px; height:16px; display:block; }
+
+  /* Loading pill with spinner */
+  .status.loading{
+    background:#f1f3f4; color:#5f6368; position:relative;
+  }
+  .status.loading::before{
+    content:""; width:14px; height:14px; border-radius:50%;
+    border:2px solid rgba(0,0,0,.25); border-top-color: rgba(0,0,0,.55);
+    display:inline-block; animation: spin .8s linear infinite;
+  }
+
+  /* In-button busy spinner — keep inside button to prevent reflow */
+  .busy::after {
+    content:""; position:absolute; right:8px; top:50%; transform:translateY(-50%);
+    width:14px; height:14px; border-radius:50%;
+    border:2px solid rgba(0,0,0,.2); border-top-color:rgba(0,0,0,.6);
+    animation: spin .8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Wider sidebars: grow columns */
+  @media (min-width:700px){ .row > div { flex-basis:260px; min-width:240px; } }
+  @media (min-width:760px){ .row > div { flex-basis:260px; min-width:240px; } }
+  @media (min-width:880px){ .row > div { flex-basis:320px; min-width:280px; } }
+
+  /* Ensure buttons and status pill are same height & aligned */
+  :root { --ctl-h: 36px; }
+  .actions .status { margin-left: 4px; }
+  .actions .status.ok  { background:#e6f4ea; color:#0f9d58; }
+  .actions .status.err { background:#fce8e6; color:#d93025; }
+
+  /* Toasts */
+  .toast { margin-top:10px; padding:8px; border-radius:6px; }
+  .toast.ok  { background:#e6f4ea; color:#0f9d58; }
+  .toast.err { background:#fce8e6; color:#d93025; }
+
+  /* Collapsible sections */
+  .section { border:1px solid #e0e0e0; border-radius:10px; margin:10px 0; background:#fff; }
+  .section > .section-header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 12px; border-bottom:1px solid #eee; cursor:pointer; user-select:none;
+  }
+  .section > .section-header h3 { margin:0; font-size:16px; }
+  .section > .section-header .chev { width:18px; height:18px; display:inline-block; transition: transform .18s ease; }
+  .section.collapsed > .section-header .chev { transform: rotate(-90deg); }
+  .section > .section-body { padding: 10px 12px; }
+  .section.collapsed > .section-body { display:none; }
+
+  /* Dirty indicator dot */
+  .section.dirty > .section-header h3::after { content:" •"; color:#d93025; font-weight:700; }
+</style>
+
+<script>
+  // === Helpers used by sidebars (deduplicated) ===
+  function qs(id){ return document.getElementById(id); }
+
+  function toast(msg, ok=true){
+    const d = document.createElement('div');
+    d.className = 'toast ' + (ok ? 'ok' : 'err');
+    d.textContent = msg;
+    (qs('detail') || document.body).prepend(d);
+    setTimeout(()=>d.remove(), 2600);
+  }
+
+  function setBusy(buttonElem, busy){
+    if(!buttonElem) return;
+    buttonElem.disabled = !!busy;
+    buttonElem.classList.toggle('busy', !!busy);
+  }
+
+  // Pretty status pill with spinner/check/error
+  function setStatus(spanElem, type, text){
+    if(!spanElem) return;
+
+    if(type === 'ok'){
+      var msg = (text || 'Saved').replace(/✓/g, '').trim();
+      spanElem.className = 'status ok';
+      spanElem.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>' +
+        '<span>' + msg + '</span>';
+    } else if(type === 'err'){
+      spanElem.className = 'status err';
+      spanElem.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>' +
+        '<span>' + (text || 'Failed') + '</span>';
+    } else {
+      // default / loading
+      spanElem.className = 'status loading';
+      spanElem.innerHTML = '<span>' + (text || 'Saving…') + '</span>';
+    }
+  }
+
+  // Collapsible section toggler
+  function toggleSection(id){
+    const sec = document.getElementById(id);
+    if(!sec) return;
+    sec.classList.toggle('collapsed');
+  }
+
+  // Dirty flag helpers
+  function markDirty(sectionEl){ if(sectionEl) sectionEl.classList.add('dirty'); }
+  function clearDirty(sectionEl){ if(sectionEl) sectionEl.classList.remove('dirty'); }
+</script>
