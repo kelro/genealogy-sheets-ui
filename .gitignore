@@ -5,7 +5,7 @@
 node_modules/
 dist/
 
-# Apps Script clasp (if adopted later)
+# Apps Script clasp (safe defaults)
 .clasp.json
 
 # Logs / temp exports
