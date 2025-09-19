@@ -1,0 +1,12 @@
+# Default: ignore everything
+**
+
+# Allow manifest
+!appsscript.json
+
+# Allow Apps Script server files
+!*.gs
+
+# Allow HTML UI files
+!*.html
+
