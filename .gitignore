@@ -1,14 +1,44 @@
-# macOS
-.DS_Store
+# ---- Keep repo clean & safe ----
 
-# Node (if you later add build tooling)
+# Never commit shell scripts
+*.sh
+
+# Never commit JS (you use .gs for Apps Script)
+*.js
+
+# Sensitive / secrets / tokens (adjust as needed)
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.crt
+token.json
+credentials.json
+client_secret.json
+service_account*.json
+secrets*.json
+*.keystore
+*.jks
+id_*
+ssh_config
+.gnupg/
+
+# Clasp auth cache (local only; do not commit)
+.clasp.json      # typically tracked; keep if you like, BUT…
+.clasprc.json    # auth token cache (sometimes at HOME); do not commit
+# Some systems put this here:
+.config/configstore/@google-clasp.json
+
+# Local OS / editor junk
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+*.swo
+
+# Node / tooling (if present)
 node_modules/
 dist/
 
-# Apps Script clasp (safe defaults)
-.clasp.json
-
-# Logs / temp exports
-*.log
-*.tmp
-*.bak
