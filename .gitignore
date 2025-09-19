@@ -37,6 +37,7 @@ Thumbs.db
 *.log
 *.swp
 *.swo
+*~
 
 # Node / tooling (if present)
 node_modules/
